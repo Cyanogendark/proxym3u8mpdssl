@@ -24,16 +24,27 @@ class TransportConfig(BaseSettings):
         default_factory=dict, description="Pattern-based route configuration"
     )
 
+    def get_transport(self, async_http: bool = True) -> Union[httpx.HTTPTransport, httpx.AsyncHTTPTransport]:
+        """
+        Create a transport object with the appropriate settings.
+        """
+        transport_cls = httpx.AsyncHTTPTransport if async_http else httpx.HTTPTransport
+
+        return transport_cls(
+            verify=False,  # Desactiva la verificación SSL
+            proxies=self.proxy_url if self.proxy_url else None
+        )
+
     def get_client(self, async_http: bool = True) -> Union[httpx.Client, httpx.AsyncClient]:
         """
-        Create an HTTP client with the appropriate settings.
+        Create an HTTP client with the appropriate transport.
         """
         client_cls = httpx.AsyncClient if async_http else httpx.Client
 
-        return client_cls(
-            proxies=self.proxy_url,
-            verify=False,  # Desactiva la verificación SSL
-        )
+        # Get the transport with SSL verification turned off
+        transport = self.get_transport(async_http=async_http)
+
+        return client_cls(transport=transport)
 
     class Config:
         env_file = ".env"
