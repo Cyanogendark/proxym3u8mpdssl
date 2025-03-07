@@ -10,7 +10,7 @@ class RouteConfig(BaseModel):
 
     proxy: bool = True
     proxy_url: Optional[str] = None
-    verify_ssl: bool = False
+    verify_ssl: bool = False  # Permite conexiones sin verificación SSL
 
 
 class TransportConfig(BaseSettings):
@@ -36,12 +36,13 @@ class TransportConfig(BaseSettings):
         # Configure specific routes
         for pattern, route in self.transport_routes.items():
             mounts[pattern] = transport_cls(
-                verify=route.verify_ssl, proxy=route.proxy_url or self.proxy_url if route.proxy else None
+                verify=False,  # Desactiva la verificación SSL
+                proxy=route.proxy_url or self.proxy_url if route.proxy else None
             )
 
         # Set default proxy for all routes if enabled
         if self.all_proxy:
-            mounts["all://"] = transport_cls(proxy=self.proxy_url)
+            mounts["all://"] = transport_cls(proxy=self.proxy_url, verify=False)  # Aplica a todas las rutas
 
         return mounts
 
