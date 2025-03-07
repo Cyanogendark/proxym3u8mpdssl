@@ -31,9 +31,9 @@ class DownloadError(Exception):
 
 
 def create_httpx_client(follow_redirects: bool = True, timeout: float = 30.0, **kwargs) -> httpx.AsyncClient:
-    """Creates an HTTPX client with configured proxy routing"""
+    """Creates an HTTPX client with configured proxy routing and SSL verification disabled"""
     mounts = settings.transport_config.get_mounts()
-    client = httpx.AsyncClient(mounts=mounts, follow_redirects=follow_redirects, timeout=timeout, **kwargs)
+    client = httpx.AsyncClient(mounts=mounts, follow_redirects=follow_redirects, timeout=timeout, verify=False, **kwargs)
     return client
 
 
@@ -101,7 +101,6 @@ class Streamer:
         Args:
             url (str): The URL to stream from.
             headers (dict): The headers to include in the request.
-
         """
         request = self.client.build_request("GET", url, headers=headers)
         self.response = await self.client.send(request, stream=True, follow_redirects=True)
@@ -246,185 +245,4 @@ async def request_with_retry(method: str, url: str, headers: dict, **kwargs) -> 
         except DownloadError as e:
             logger.error(f"Failed to download file: {e}")
             raise
-
-
-def encode_mediaflow_proxy_url(
-    mediaflow_proxy_url: str,
-    endpoint: typing.Optional[str] = None,
-    destination_url: typing.Optional[str] = None,
-    query_params: typing.Optional[dict] = None,
-    request_headers: typing.Optional[dict] = None,
-    response_headers: typing.Optional[dict] = None,
-    encryption_handler: EncryptionHandler = None,
-    expiration: int = None,
-    ip: str = None,
-) -> str:
-    """
-    Encodes & Encrypt (Optional) a MediaFlow proxy URL with query parameters and headers.
-
-    Args:
-        mediaflow_proxy_url (str): The base MediaFlow proxy URL.
-        endpoint (str, optional): The endpoint to append to the base URL. Defaults to None.
-        destination_url (str, optional): The destination URL to include in the query parameters. Defaults to None.
-        query_params (dict, optional): Additional query parameters to include. Defaults to None.
-        request_headers (dict, optional): Headers to include as query parameters. Defaults to None.
-        response_headers (dict, optional): Headers to include as query parameters. Defaults to None.
-        encryption_handler (EncryptionHandler, optional): The encryption handler to use. Defaults to None.
-        expiration (int, optional): The expiration time for the encrypted token. Defaults to None.
-        ip (str, optional): The public IP address to include in the query parameters. Defaults to None.
-
-    Returns:
-        str: The encoded MediaFlow proxy URL.
-    """
-    query_params = query_params or {}
-    if destination_url is not None:
-        query_params["d"] = destination_url
-
-    # Add headers if provided
-    if request_headers:
-        query_params.update(
-            {key if key.startswith("h_") else f"h_{key}": value for key, value in request_headers.items()}
-        )
-    if response_headers:
-        query_params.update(
-            {key if key.startswith("r_") else f"r_{key}": value for key, value in response_headers.items()}
-        )
-
-    if encryption_handler:
-        encrypted_token = encryption_handler.encrypt_data(query_params, expiration, ip)
-        encoded_params = urlencode({"token": encrypted_token})
-    else:
-        encoded_params = urlencode(query_params)
-
-    # Construct the full URL
-    if endpoint is None:
-        return f"{mediaflow_proxy_url}?{encoded_params}"
-
-    base_url = parse.urljoin(mediaflow_proxy_url, endpoint)
-    return f"{base_url}?{encoded_params}"
-
-
-def get_original_scheme(request: Request) -> str:
-    """
-    Determines the original scheme (http or https) of the request.
-
-    Args:
-        request (Request): The incoming HTTP request.
-
-    Returns:
-        str: The original scheme ('http' or 'https')
-    """
-    # Check the X-Forwarded-Proto header first
-    forwarded_proto = request.headers.get("X-Forwarded-Proto")
-    if forwarded_proto:
-        return forwarded_proto
-
-    # Check if the request is secure
-    if request.url.scheme == "https" or request.headers.get("X-Forwarded-Ssl") == "on":
-        return "https"
-
-    # Check for other common headers that might indicate HTTPS
-    if (
-        request.headers.get("X-Forwarded-Ssl") == "on"
-        or request.headers.get("X-Forwarded-Protocol") == "https"
-        or request.headers.get("X-Url-Scheme") == "https"
-    ):
-        return "https"
-
-    # Default to http if no indicators of https are found
-    return "http"
-
-
-@dataclass
-class ProxyRequestHeaders:
-    request: dict
-    response: dict
-
-
-def get_proxy_headers(request: Request) -> ProxyRequestHeaders:
-    """
-    Extracts proxy headers from the request query parameters.
-
-    Args:
-        request (Request): The incoming HTTP request.
-
-    Returns:
-        ProxyRequest: A named tuple containing the request headers and response headers.
-    """
-    request_headers = {k: v for k, v in request.headers.items() if k in SUPPORTED_REQUEST_HEADERS}
-    request_headers.update({k[2:].lower(): v for k, v in request.query_params.items() if k.startswith("h_")})
-    response_headers = {k[2:].lower(): v for k, v in request.query_params.items() if k.startswith("r_")}
-    return ProxyRequestHeaders(request_headers, response_headers)
-
-
-class EnhancedStreamingResponse(Response):
-    body_iterator: typing.AsyncIterable[typing.Any]
-
-    def __init__(
-        self,
-        content: typing.Union[typing.AsyncIterable[typing.Any], typing.Iterable[typing.Any]],
-        status_code: int = 200,
-        headers: typing.Optional[typing.Mapping[str, str]] = None,
-        media_type: typing.Optional[str] = None,
-        background: typing.Optional[BackgroundTask] = None,
-    ) -> None:
-        if isinstance(content, typing.AsyncIterable):
-            self.body_iterator = content
-        else:
-            self.body_iterator = iterate_in_threadpool(content)
-        self.status_code = status_code
-        self.media_type = self.media_type if media_type is None else media_type
-        self.background = background
-        self.init_headers(headers)
-
-    @staticmethod
-    async def listen_for_disconnect(receive: Receive) -> None:
-        try:
-            while True:
-                message = await receive()
-                if message["type"] == "http.disconnect":
-                    logger.debug("Client disconnected")
-                    break
-        except Exception as e:
-            logger.error(f"Error in listen_for_disconnect: {str(e)}")
-
-    async def stream_response(self, send: Send) -> None:
-        try:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": self.status_code,
-                    "headers": self.raw_headers,
-                }
-            )
-            async for chunk in self.body_iterator:
-                if not isinstance(chunk, (bytes, memoryview)):
-                    chunk = chunk.encode(self.charset)
-                try:
-                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                except (ConnectionResetError, anyio.BrokenResourceError):
-                    logger.info("Client disconnected during streaming")
-                    return
-
-            await send({"type": "http.response.body", "body": b"", "more_body": False})
-        except Exception as e:
-            logger.exception(f"Error in stream_response: {str(e)}")
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        async with anyio.create_task_group() as task_group:
-
-            async def wrap(func: typing.Callable[[], typing.Awaitable[None]]) -> None:
-                try:
-                    await func()
-                except Exception as e:
-                    if not isinstance(e, anyio.get_cancelled_exc_class()):
-                        logger.exception("Error in streaming task")
-                    raise
-                finally:
-                    task_group.cancel_scope.cancel()
-
-            task_group.start_soon(wrap, partial(self.stream_response, send))
-            await wrap(partial(self.listen_for_disconnect, receive))
-
-        if self.background is not None:
-            await self.background()
+            
