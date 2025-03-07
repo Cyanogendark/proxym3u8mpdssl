@@ -10,7 +10,7 @@ class RouteConfig(BaseModel):
 
     proxy: bool = True
     proxy_url: Optional[str] = None
-    verify_ssl: bool = True
+    verify_ssl: bool = False
 
 
 class TransportConfig(BaseSettings):
