@@ -1,5 +1,4 @@
 from typing import Dict, Optional, Union
-
 import httpx
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
@@ -30,10 +29,16 @@ class TransportConfig(BaseSettings):
         """
         transport_cls = httpx.AsyncHTTPTransport if async_http else httpx.HTTPTransport
 
-        return transport_cls(
+        # Configuración del transporte sin usar 'proxies' directamente
+        transport = transport_cls(
             verify=False,  # Desactiva la verificación SSL
-            proxies=self.proxy_url if self.proxy_url else None
         )
+
+        if self.proxy_url:
+            # Si se ha configurado un proxy, se configura
+            transport.proxies = self.proxy_url
+
+        return transport
 
     def get_client(self, async_http: bool = True) -> Union[httpx.Client, httpx.AsyncClient]:
         """
@@ -41,9 +46,10 @@ class TransportConfig(BaseSettings):
         """
         client_cls = httpx.AsyncClient if async_http else httpx.Client
 
-        # Get the transport with SSL verification turned off
+        # Obtener el transporte adecuado
         transport = self.get_transport(async_http=async_http)
 
+        # Crear y retornar el cliente con el transporte configurado
         return client_cls(transport=transport)
 
     class Config:
