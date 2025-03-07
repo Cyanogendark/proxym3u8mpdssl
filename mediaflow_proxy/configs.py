@@ -24,27 +24,16 @@ class TransportConfig(BaseSettings):
         default_factory=dict, description="Pattern-based route configuration"
     )
 
-    def get_mounts(
-        self, async_http: bool = True
-    ) -> Dict[str, Optional[Union[httpx.HTTPTransport, httpx.AsyncHTTPTransport]]]:
+    def get_client(self, async_http: bool = True) -> Union[httpx.Client, httpx.AsyncClient]:
         """
-        Get a dictionary of httpx mount points to transport instances.
+        Create an HTTP client with the appropriate settings.
         """
-        mounts = {}
-        transport_cls = httpx.AsyncHTTPTransport if async_http else httpx.HTTPTransport
+        client_cls = httpx.AsyncClient if async_http else httpx.Client
 
-        # Configure specific routes
-        for pattern, route in self.transport_routes.items():
-            mounts[pattern] = transport_cls(
-                verify=False,  # Desactiva la verificación SSL
-                proxy=route.proxy_url or self.proxy_url if route.proxy else None
-            )
-
-        # Set default proxy for all routes if enabled
-        if self.all_proxy:
-            mounts["all://"] = transport_cls(proxy=self.proxy_url, verify=False)  # Aplica a todas las rutas
-
-        return mounts
+        return client_cls(
+            proxies=self.proxy_url,
+            verify=False,  # Desactiva la verificación SSL
+        )
 
     class Config:
         env_file = ".env"
@@ -67,3 +56,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Cliente HTTP con SSL deshabilitado
+client = settings.transport_config.get_client(async_http=False)
+async_client = settings.transport_config.get_client(async_http=True)
