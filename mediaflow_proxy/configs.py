@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Union
+
 import httpx
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
@@ -9,7 +10,7 @@ class RouteConfig(BaseModel):
 
     proxy: bool = True
     proxy_url: Optional[str] = None
-    verify_ssl: bool = False  # Permite conexiones sin verificación SSL
+    verify_ssl: bool = False
 
 
 class TransportConfig(BaseSettings):
@@ -31,26 +32,35 @@ class TransportConfig(BaseSettings):
 
         # Configuración del transporte sin usar 'proxies' directamente
         transport = transport_cls(
-            verify=False,  # Desactiva la verificación SSL
+            verify=False,  # Desactiva la verificación SSL para permitir certificados autofirmados
         )
 
         if self.proxy_url:
-            # Si se ha configurado un proxy, se configura
-            transport.proxies = self.proxy_url
+            transport.proxies = self.proxy_url  # Configuración del proxy si está habilitado
 
         return transport
 
-    def get_client(self, async_http: bool = True) -> Union[httpx.Client, httpx.AsyncClient]:
+    def get_mounts(
+        self, async_http: bool = True
+    ) -> Dict[str, Optional[Union[httpx.HTTPTransport, httpx.AsyncHTTPTransport]]]:
         """
-        Create an HTTP client with the appropriate transport.
+        Get a dictionary of httpx mount points to transport instances.
         """
-        client_cls = httpx.AsyncClient if async_http else httpx.Client
+        mounts = {}
+        transport_cls = httpx.AsyncHTTPTransport if async_http else httpx.HTTPTransport
 
-        # Obtener el transporte adecuado
-        transport = self.get_transport(async_http=async_http)
+        # Configure specific routes
+        for pattern, route in self.transport_routes.items():
+            mounts[pattern] = transport_cls(
+                verify=False,  # Desactiva la verificación SSL para permitir certificados autofirmados
+                proxy=route.proxy_url or self.proxy_url if route.proxy else None
+            )
 
-        # Crear y retornar el cliente con el transporte configurado
-        return client_cls(transport=transport)
+        # Set default proxy for all routes if enabled
+        if self.all_proxy:
+            mounts["all://"] = transport_cls(proxy=self.proxy_url)
+
+        return mounts
 
     class Config:
         env_file = ".env"
@@ -73,7 +83,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-# Cliente HTTP con SSL deshabilitado
-client = settings.transport_config.get_client(async_http=False)
-async_client = settings.transport_config.get_client(async_http=True)
